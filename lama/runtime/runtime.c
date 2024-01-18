@@ -17,7 +17,7 @@ extern size_t __gc_stack_top, __gc_stack_bottom;
   /*assert(__builtin_frame_address(0) <= (void *)__gc_stack_top);*/
 
 #define POST_GC()                                                                                  \
-  /*assert(__builtin_frame_address(0) <= (void *)__gc_stack_top); */                         \
+  /*assert(__builtin_frame_address(0) <= (void *)__gc_stack_top); */                               \
   if (flag) { __gc_stack_top = 0; }
 
 static void vfailure (char *s, va_list args) {
@@ -814,6 +814,28 @@ extern void *Bclosure (int bn, void *entry, ...) {
   return r->contents;
 }
 
+extern void *Bclosure_init_from_end (int bn, void *entry, size_t *init) {
+  int   i, ai;
+  data *r;
+  int   n = UNBOX(bn);
+
+  PRE_GC();
+
+  r = (data *)alloc_closure(n + 1);
+  push_extra_root((void **)&r);
+  ((void **)r->contents)[0] = entry;
+
+  for (i = 0; i < n; i++) {
+    ai                          = init[i];
+    ((int *)r->contents)[n - i] = ai;
+  }
+
+  POST_GC();
+
+  pop_extra_root((void **)&r);
+  return r->contents;
+}
+
 extern void *Barray (int bn, ...) {
   va_list args;
   int     i, ai;
@@ -837,18 +859,18 @@ extern void *Barray (int bn, ...) {
   return r->contents;
 }
 
-extern void *Barray_init_from_end (int bn, const size_t* init) {
-  int     i, ai;
-  data   *r;
-  int     n = UNBOX(bn);
+extern void *Barray_init_from_end (int bn, const size_t *init) {
+  int   i, ai;
+  data *r;
+  int   n = UNBOX(bn);
 
   PRE_GC();
 
   r = (data *)alloc_array(n);
 
   for (i = 0; i < n; i++) {
-    ai                      = (int)init[i];
-    ((int *)r->contents)[n-1-i] = ai;
+    ai                              = (int)init[i];
+    ((int *)r->contents)[n - 1 - i] = ai;
   }
 
   POST_GC();
@@ -889,7 +911,7 @@ extern void *Bsexp (int bn, ...) {
   return (int *)r->contents;
 }
 
-extern void *Bsexp_init_from_end (int bn, int tag, size_t* init) {
+extern void *Bsexp_init_from_end (int bn, int tag, size_t *init) {
   int     i;
   int     ai;
   size_t *p;
@@ -901,14 +923,12 @@ extern void *Bsexp_init_from_end (int bn, int tag, size_t* init) {
   r                = (data *)alloc_sexp(n);
   ((sexp *)r)->tag = 0;
 
-
   for (i = 0; i < n; i++) {
-    ai                       = (int)init[i];
-    ((int *)r->contents)[n-i] = ai;
+    ai                          = (int)init[i];
+    ((int *)r->contents)[n - i] = ai;
   }
 
   ((sexp *)r)->tag = UNBOX(tag);
-
 
   POST_GC();
   return (int *)r->contents;
@@ -1294,8 +1314,8 @@ extern void set_args (int argc, char *argv[]) {
   POST_GC();
 
   global_sysargs = p;
-  global_stdout = stdout;
-  global_stderr = stderr;
+  global_stdout  = stdout;
+  global_stderr  = stderr;
 
   push_extra_root((void **)&global_sysargs);
 }

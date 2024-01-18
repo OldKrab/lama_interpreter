@@ -7,6 +7,19 @@
 #include "../lama/runtime/gc.h"
 #include "../lama/runtime/runtime.h"
 
+#define TODO(what)                           \
+    do                                       \
+        failure("Unimplemented " what "\n"); \
+    while (0)
+
+#define VA_ARGS(...) , ##__VA_ARGS__
+#define ASSERT(cond, fmt, ...)                      \
+    do                                              \
+        if (!(cond)) {                              \
+            failure(fmt "\n" VA_ARGS(__VA_ARGS__)); \
+        }                                           \
+    while (0)
+
 void* __start_custom_data;
 void* __stop_custom_data;
 
@@ -22,6 +35,9 @@ extern int LtagHash(char*);
 extern void* Bsexp_init_from_end(int bn, int tag, size_t* init);
 extern int Btag(void* d, int t, int n);
 extern void* Lstring(void* p);
+extern void* Bclosure_init_from_end(int bn, void* entry, size_t* init);
+
+extern size_t __gc_stack_top, __gc_stack_bottom;
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -35,72 +51,12 @@ typedef struct {
     char buffer[0];
 } bytefile;
 
-// /* Gets a name for a public symbol */
-// char* get_public_name(bytefile* f, int i) { return get_string(f, f->public_ptr[i * 2]); }
-
-/* Gets an offset for a publie symbol */
-int get_public_offset(bytefile* f, int i) { return f->public_ptr[i * 2 + 1]; }
-
-/* Reads a binary bytecode file by name and unpacks it */
-bytefile* read_file(char* fname) {
-    FILE* f = fopen(fname, "rb");
-    long size;
-    bytefile* file;
-
-    if (f == 0) {
-        failure("%s\n", strerror(errno));
-    }
-
-    if (fseek(f, 0, SEEK_END) == -1) {
-        failure("%s\n", strerror(errno));
-    }
-
-    file = (bytefile*)malloc(sizeof(int) * 4 + (size = ftell(f)));
-
-    if (file == 0) {
-        failure("*** FAILURE: unable to allocate memory.\n");
-    }
-
-    rewind(f);
-
-    if (size != fread(&file->stringtab_size, 1, size, f)) {
-        failure("%s\n", strerror(errno));
-    }
-
-    fclose(f);
-
-    file->string_ptr = &file->buffer[file->public_symbols_number * 2 * sizeof(int)];
-    file->public_ptr = (int*)file->buffer;
-    file->code_ptr = &file->string_ptr[file->stringtab_size];
-    file->global_ptr = (int*)malloc(file->global_area_size * sizeof(int));
-
-    return file;
-}
-
-#define TODO(what)                           \
-    do                                       \
-        failure("Unimplemented " what "\n"); \
-    while (0)
-
-#define VA_ARGS(...) , ##__VA_ARGS__
-#define ASSERT(cond, fmt, ...)                      \
-    do                                              \
-        if (!(cond)) {                              \
-            failure(fmt "\n" VA_ARGS(__VA_ARGS__)); \
-        }                                           \
-    while (0)
-
 #define STACK_SIZE (1 << 20)
 
 typedef struct {
     size_t* p;
     size_t n;
-} size_slice_t;
-
-typedef struct {
-    char* p;
-    size_t n;
-} char_slice_t;
+} slice_t;
 
 typedef struct {
     size_t* begin;
@@ -111,17 +67,18 @@ typedef struct {
 typedef struct {
     stack_t stack;
     stack_t cstack;
-    size_slice_t args;
-    size_slice_t locals;
-    size_slice_t closed;
-    size_slice_t globals;
+    slice_t args;
+    slice_t locals;
+    slice_t closed;
+    slice_t globals;
     char* code_start;
     char* string_area;
     char* ip;
     size_t* bp;
+    bool is_closure;
 } context_t;
 
-extern size_t __gc_stack_top, __gc_stack_bottom;
+/* Context functions */
 
 static inline char* get_string(context_t* c, int idx) { return &c->string_area[idx]; }
 
@@ -139,19 +96,15 @@ static inline char next_code_byte(context_t* c) {
 
 static inline void update_gc_stack_variables(context_t* c) { __gc_stack_top = ((size_t)c->stack.sp) - 4; }
 
+// for debug
+size_t get_stack_size(context_t* c) { return c->stack.begin + c->stack.n - c->stack.sp; }
+
 // move sp and write value
 static inline void push_stack(context_t* c, size_t v) {
     ASSERT(c->stack.sp >= c->stack.begin + sizeof(size_t), "Overflow stack");
     c->stack.sp--;
     *c->stack.sp = v;
     update_gc_stack_variables(c);
-}
-
-// move sp and write value
-static inline void push_cstack(context_t* c, size_t v) {
-    ASSERT(c->cstack.sp >= c->cstack.begin + sizeof(size_t), "Overflow cstack");
-    c->cstack.sp--;
-    *c->cstack.sp = v;
 }
 
 static inline void push_stack_boxed(context_t* c, size_t v) { push_stack(c, BOX(v)); }
@@ -165,12 +118,10 @@ static inline size_t pop_stack(context_t* c) {
     return v;
 }
 
-// read value and move sp
-static inline size_t pop_cstack(context_t* c) {
-    ASSERT(c->cstack.sp < c->cstack.begin + c->cstack.n, "Underflow cstack");
-    size_t v = *c->cstack.sp;
-    c->cstack.sp++;
-    return v;
+static inline void drop_stack_n(context_t* c, size_t n) {
+    ASSERT(c->stack.sp + n <= c->stack.begin + c->stack.n, "Underflow stack");
+    c->stack.sp += n;
+    update_gc_stack_variables(c);
 }
 
 static inline size_t pop_stack_unboxed(context_t* c) {
@@ -181,7 +132,27 @@ static inline size_t pop_stack_unboxed(context_t* c) {
 
 static inline size_t is_stack_empty(context_t* c) { return c->stack.sp == c->stack.begin + c->stack.n; }
 
-static inline size_t peek_stack(context_t* c) { return *c->stack.sp; }
+static inline size_t peek_stack_i(context_t* c, size_t i) {
+    ASSERT(c->cstack.sp + i < c->cstack.begin + c->cstack.n, "Out of bounds of stack");
+    return c->stack.sp[i];
+}
+
+static inline size_t peek_stack(context_t* c) { return peek_stack_i(c, 0); }
+
+// move sp and write value
+static inline void push_cstack(context_t* c, size_t v) {
+    ASSERT(c->cstack.sp >= c->cstack.begin + sizeof(size_t), "Overflow cstack");
+    c->cstack.sp--;
+    *c->cstack.sp = v;
+}
+
+// read value and move sp
+static inline size_t pop_cstack(context_t* c) {
+    ASSERT(c->cstack.sp < c->cstack.begin + c->cstack.n, "Underflow cstack");
+    size_t v = *c->cstack.sp;
+    c->cstack.sp++;
+    return v;
+}
 
 typedef enum {
     MEM_GLOBAL = 0,
@@ -203,10 +174,13 @@ static inline size_t* get_memory(context_t* c, MEM mem, int idx) {
             ASSERT(idx < c->args.n, "idx > c->args.n");
             return &c->args.p[-idx];
         case MEM_CLOSED:
+            ASSERT(c->is_closure, "not in closure");
             ASSERT(idx < c->closed.n, "idx > c->closed.n");
             return &c->closed.p[idx];
     }
 }
+
+/* handlers of instructions */
 
 static inline int32_t do_binop(int32_t x, int32_t y, char op) {
     // char* ops[] = {"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"};
@@ -241,8 +215,8 @@ static inline int32_t do_binop(int32_t x, int32_t y, char op) {
 }
 
 static inline void handle_binop(context_t* c, char l) {
-    int32_t y = (int32_t)pop_stack_unboxed(c);
-    int32_t x = (int32_t)pop_stack_unboxed(c);
+    int32_t y = UNBOX((int32_t)pop_stack(c));
+    int32_t x = UNBOX((int32_t)pop_stack(c));
     int32_t res = do_binop(x, y, l - 1);
     push_stack_boxed(c, res);
 }
@@ -275,44 +249,6 @@ static inline void handle_sta(context_t* c) {
     push_stack(c, (size_t)Bsta(value, idx_or_var, x));
 }
 
-/*
-Stack:
-        <---- sp
-    ret value
-    locals
-        <---- bp
-    args
-
-Call stack:
-    prev locals n
-    prev args n
-    prev bp
-    return addr
-*/
-static inline bool handle_end(context_t* c) {
-    size_t ret_value = pop_stack(c);
-    for (int i = 0; i < c->locals.n; i++)
-        pop_stack(c);
-    for (int i = 0; i < c->args.n; i++)
-        pop_stack(c);
-    if (is_stack_empty(c))
-        return true;  // end from main
-    push_stack(c, ret_value);
-
-    size_t prev_locals_n = pop_cstack(c);
-    size_t prev_args_n = pop_cstack(c);
-    size_t* prev_bp = (size_t*)pop_cstack(c);
-
-    char* ret_addr = (char*)pop_cstack(c);
-    c->bp = prev_bp;
-    c->ip = ret_addr;
-    c->locals.p = prev_bp - prev_locals_n;
-    c->args.p = prev_bp + (prev_args_n - 1);
-    c->locals.n = prev_locals_n;
-    c->args.n = prev_args_n;
-    return false;
-}
-
 static inline void handle_ret(context_t* c) {
     // fprintf(f, "RET");
     TODO("RET");
@@ -342,7 +278,7 @@ static inline void handle_ld(context_t* c, MEM mem) {
 
 static inline void handle_lda(context_t* c, MEM mem) {
     int idx = next_code_int(c);
-    size_t * v = get_memory(c, mem, idx);
+    size_t* v = get_memory(c, mem, idx);
     push_stack(c, (size_t)v);
 }
 
@@ -376,21 +312,26 @@ static inline void handle_jump(context_t* c) {
 Stack:
         <---- sp
     args
+    [closure]
 
 Call stack:
+    is_closure_flag
     return addr
 
 will turn into
 Stack:
         <---- sp
+    ret value
     locals
         <---- bp
     args
+    [closure]
 
 Call stack:
+    prev bp
     prev locals n
     prev args n
-    prev bp
+    is_closure_flag
     return addr
 
 */
@@ -407,53 +348,75 @@ static inline void handle_begin(context_t* c) {
     }
     c->locals.p = c->stack.sp;
 
-    push_cstack(c, (size_t)prev_bp);
     push_cstack(c, prev_args_n);
     push_cstack(c, prev_locals_n);
+    push_cstack(c, (size_t)prev_bp);
 }
 
-static inline void handle_cbegin(context_t* context) {
-    // fprintf(f, "CBEGIN\t%d ", INT);
-    // fprintf(f, "%d", INT);
-    TODO("CBEGIN");
-}
+static inline bool handle_end(context_t* c) {
+    size_t ret_value = pop_stack(c);
+    if (c->is_closure)
+        drop_stack_n(c, c->args.n + c->locals.n + 1);
+    else
+        drop_stack_n(c, c->args.n + c->locals.n);
+    if (is_stack_empty(c))
+        return true;  // end from main
+    push_stack(c, ret_value);
 
-static inline void handle_clojure(context_t* context) {
-    // fprintf(f, "CLOSURE\t0x%.8x", INT);
-    // {
-    //     int n = INT;
-    //     for (int i = 0; i < n; i++) {
-    //         switch (BYTE) {
-    //             case 0:
-    //                 fprintf(f, "G(%d)", INT);
-    //                 break;
-    //             case 1:
-    //                 fprintf(f, "L(%d)", INT);
-    //                 break;
-    //             case 2:
-    //                 fprintf(f, "A(%d)", INT);
-    //                 break;
-    //             case 3:
-    //                 fprintf(f, "C(%d)", INT);
-    //                 break;
-    //             default:
-    //                 FAIL;
-    //         }
-    //     }
-    // };
-    TODO("CLOJURE");
+    c->bp = (size_t*)pop_cstack(c);
+    c->locals.n = pop_cstack(c);
+    c->args.n = pop_cstack(c);
+    c->is_closure = (bool)pop_cstack(c);
+    c->ip = (char*)pop_cstack(c);
+
+    c->locals.p = c->bp - c->locals.n;
+    c->args.p = c->bp + (c->args.n - 1);
+    return false;
 }
 
 static inline void handle_callc(context_t* c) {
-    // fprintf(f, "CALLC\t%d", INT);
-    TODO("CALLC");
+    int args_n = next_code_int(c);
+    void* closure = (void*)peek_stack_i(c, args_n);
+    size_t closure_offset = (size_t)Belem(closure, BOX(0));
+    push_cstack(c, (size_t)(c->ip));
+    push_cstack(c, (size_t)c->is_closure);
+
+    c->ip = c->code_start + closure_offset;
+    c->is_closure = true;
 }
 
 static inline void handle_call(context_t* c) {
     int offset = next_code_int(c);
     int args_n = next_code_int(c);
     push_cstack(c, (size_t)(c->ip));
+    push_cstack(c, (size_t)c->is_closure);
+
     c->ip = c->code_start + offset;
+    c->is_closure = false;
+}
+
+static inline void handle_cbegin(context_t* c) {
+    // fprintf(f, "CBEGIN\t%d ", INT);
+    // fprintf(f, "%d", INT);
+    TODO("CBEGIN");
+}
+
+static inline void handle_clojure(context_t* c) {
+    char* closure_offset = (char*)next_code_int(c);
+    int closed_n = next_code_int(c);
+    for (int i = 0; i < closed_n; i++) {
+        MEM mem = (MEM)next_code_byte(c);
+        int idx = next_code_int(c);
+        push_stack(c, (size_t)get_memory(c, mem, idx));
+    }
+
+    void* clojure = Bclosure_init_from_end(BOX(closed_n), closure_offset, c->stack.sp);
+
+    for (int i = 0; i < closed_n; i++) {
+        pop_stack(c);
+    }
+
+    push_stack(c, (size_t)clojure);
 }
 
 static inline void handle_tag(context_t* c) {
@@ -483,7 +446,7 @@ static inline void handle_line(context_t* c) {
 static inline void handle_patt(context_t* context, int l) {
     char* pats[] = {"=str", "#string", "#array", "#sexp", "#ref", "#val", "#fun"};
     // fprintf(f, "PATT\t%s", pats[l]);
-    TODO("LINE");
+    TODO("PATT");
 }
 
 static inline void handle_call_read(context_t* c) {
@@ -536,6 +499,7 @@ void disassemble(FILE* f, bytefile* bf) {
     context.globals.n = bf->global_area_size;
 
     context.string_area = bf->string_ptr;
+    context.is_closure = false;
 
     __gc_stack_bottom = (size_t)context.stack.sp;
     update_gc_stack_variables(&context);
@@ -549,7 +513,7 @@ void disassemble(FILE* f, bytefile* bf) {
 
         switch (h) {
             case 15:
-                goto stop;
+                return;
 
             /* BINOP */
             case 0:
@@ -681,7 +645,42 @@ void disassemble(FILE* f, bytefile* bf) {
         }
 
     } while (1);
-stop:
+}
+
+/* Reads a binary bytecode file by name and unpacks it */
+bytefile* read_file(char* fname) {
+    FILE* f = fopen(fname, "rb");
+    long size;
+    bytefile* file;
+
+    if (f == 0) {
+        failure("%s\n", strerror(errno));
+    }
+
+    if (fseek(f, 0, SEEK_END) == -1) {
+        failure("%s\n", strerror(errno));
+    }
+
+    file = (bytefile*)malloc(sizeof(int) * 4 + (size = ftell(f)));
+
+    if (file == 0) {
+        failure("*** FAILURE: unable to allocate memory.\n");
+    }
+
+    rewind(f);
+
+    if (size != fread(&file->stringtab_size, 1, size, f)) {
+        failure("%s\n", strerror(errno));
+    }
+
+    fclose(f);
+
+    file->string_ptr = &file->buffer[file->public_symbols_number * 2 * sizeof(int)];
+    file->public_ptr = (int*)file->buffer;
+    file->code_ptr = &file->string_ptr[file->stringtab_size];
+    file->global_ptr = (int*)malloc(file->global_area_size * sizeof(int));
+
+    return file;
 }
 
 int main(int argc, char* argv[]) {
