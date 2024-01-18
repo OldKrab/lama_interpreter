@@ -6,6 +6,7 @@
 
 #include "../lama/runtime/gc.h"
 #include "../lama/runtime/runtime.h"
+#include "../lama/runtime/runtime_common.h"
 
 #define TODO(what)                           \
     do                                       \
@@ -104,6 +105,17 @@ static inline char next_code_byte(context_t* c) {
 }
 
 static inline void update_gc_stack_top(context_t* c) { __gc_stack_top = ((size_t)c->stack.sp) - 4; }
+
+static inline void* get_closure_from_stack(context_t* c) {
+    ASSERT(c->is_closure, "not in closure");
+    return (void*)c->args.p[1];
+}
+
+static inline void init_closed(context_t* c) {
+    data* closure = get_closure_from_stack(c);
+    c->closed.n = LEN(TO_DATA(closure)->data_header) - 1;
+    c->closed.p = (size_t*)closure + 1;
+}
 
 // for debug
 size_t get_stack_size(context_t* c) { return c->stack.begin + c->stack.n - c->stack.sp; }
@@ -330,7 +342,6 @@ Call stack:
 will turn into
 Stack:
         <---- sp
-    ret value
     locals
         <---- bp
     args
@@ -356,11 +367,35 @@ static inline void handle_begin(context_t* c) {
         push_stack_boxed(c, 0);
     }
     c->locals.p = c->stack.sp;
+    c->closed.n = 0;
+    c->closed.p = 0;
 
     push_cstack(c, prev_args_n);
     push_cstack(c, prev_locals_n);
     push_cstack(c, (size_t)prev_bp);
 }
+
+static inline void handle_cbegin(context_t* c) {
+    handle_begin(c);
+    init_closed(c);
+}
+
+/*
+Stack:
+        <---- sp
+    ret val
+    locals
+        <---- bp
+    args
+    [closure]
+
+Call stack:
+    prev bp
+    prev locals n
+    prev args n
+    is_closure_flag
+    return addr
+*/
 
 static inline bool handle_end(context_t* c) {
     size_t ret_value = pop_stack(c);
@@ -380,8 +415,14 @@ static inline bool handle_end(context_t* c) {
 
     c->locals.p = c->bp - c->locals.n;
     c->args.p = c->bp + (c->args.n - 1);
+
+    if (c->is_closure)
+        init_closed(c);
+
     return false;
 }
+
+
 
 static inline void handle_callc(context_t* c) {
     int args_n = next_code_int(c);
@@ -404,28 +445,22 @@ static inline void handle_call(context_t* c) {
     c->is_closure = false;
 }
 
-static inline void handle_cbegin(context_t* c) {
-    // fprintf(f, "CBEGIN\t%d ", INT);
-    // fprintf(f, "%d", INT);
-    TODO("CBEGIN");
-}
-
 static inline void handle_clojure(context_t* c) {
     char* closure_offset = (char*)next_code_int(c);
     int closed_n = next_code_int(c);
     for (int i = 0; i < closed_n; i++) {
         MEM mem = (MEM)next_code_byte(c);
         int idx = next_code_int(c);
-        push_stack(c, (size_t)get_memory(c, mem, idx));
+        push_stack(c, *get_memory(c, mem, idx));
     }
 
-    void* clojure = Bclosure_init_from_end(BOX(closed_n), closure_offset, c->stack.sp);
+    void* closure = Bclosure_init_from_end(BOX(closed_n), closure_offset, c->stack.sp);
 
     for (int i = 0; i < closed_n; i++) {
         pop_stack(c);
     }
 
-    push_stack(c, (size_t)clojure);
+    push_stack(c, (size_t)closure);
 }
 
 static inline void handle_tag(context_t* c) {
@@ -438,8 +473,10 @@ static inline void handle_tag(context_t* c) {
 }
 
 static inline void handle_array(context_t* c) {
-    // fprintf(f, "ARRAY\t%d", INT);
-    TODO("ARRAY");
+    int n = next_code_int(c);
+    void* x = (void*)pop_stack(c);
+    size_t res = Barray_patt(x, BOX(n));
+    push_stack(c, res);
 }
 
 static inline void handle_fail(context_t* c) {
