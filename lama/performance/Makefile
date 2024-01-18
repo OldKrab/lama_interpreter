@@ -13,6 +13,10 @@ $(TESTS): %: %.lama
 	@echo "Run lama with -i"
 	LAMA=../runtime echo "42" | `which time` -f "$@\t%U" $(LAMAC) -i $<
 
+	@echo "Run lama with -s"
+	LAMA=../runtime echo "42" | `which time` -f "$@\t%U" $(LAMAC) -s $<
+
+
 	@echo "Compiled binary with lama"
 	LAMA=../runtime $(LAMAC)  $< && `which time` -f "$@\t%U" ./$@
 
