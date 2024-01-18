@@ -4,3 +4,4 @@ compile_flags.txt
 *.o
 lama_interpreter
 *.log
+*.bc
