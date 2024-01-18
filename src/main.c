@@ -21,9 +21,6 @@
         }                                           \
     while (0)
 
-void* __start_custom_data;
-void* __stop_custom_data;
-
 /*  Lama runtime functions  */
 extern int Lread();
 extern int Lwrite(int n);
@@ -61,7 +58,6 @@ typedef struct {
 } bytefile;
 
 #define STACK_SIZE (1 << 20)
-#define GLOBALS_SIZE (1 << 20)
 
 typedef struct {
     size_t* p;
@@ -553,7 +549,8 @@ void disassemble(FILE* f, bytefile* bf) {
 
     __init();  // init lama gc
     context_t context;
-    size_t* data_mem = malloc(STACK_SIZE * sizeof(size_t) * 2 + GLOBALS_SIZE * sizeof(size_t));
+    size_t global_size = bf->global_area_size;
+    size_t* data_mem = malloc(STACK_SIZE * sizeof(size_t) * 2 + global_size * sizeof(size_t));
     context.cstack.begin = data_mem;
     context.cstack.n = STACK_SIZE;
     context.cstack.sp = context.cstack.begin + context.cstack.n;
@@ -563,15 +560,14 @@ void disassemble(FILE* f, bytefile* bf) {
     context.stack.sp = context.stack.begin + context.stack.n;
 
     context.globals.p = data_mem + STACK_SIZE * 2;
-    context.globals.n = GLOBALS_SIZE;
-
+    context.globals.n = global_size;
     context.ip = bf->code_ptr;
     context.code_start = bf->code_ptr;
 
     context.string_area = bf->string_ptr;
     context.is_closure = false;
 
-    __gc_stack_bottom = (size_t)(data_mem + STACK_SIZE * 2 + GLOBALS_SIZE);
+    __gc_stack_bottom = (size_t)(data_mem + STACK_SIZE * 2 + global_size);
     update_gc_stack_top(&context);
 
     push_stack_boxed(&context, 0);

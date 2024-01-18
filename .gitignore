@@ -3,3 +3,4 @@ build/
 compile_flags.txt
 *.o
 lama_interpreter
+*.log
