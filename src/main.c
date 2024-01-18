@@ -17,6 +17,7 @@ extern void* Bstring(void* p);
 extern int Llength(void* p);
 extern void* Belem(void* p, int i);
 extern void* Bsta(void* v, int i, void* x);
+extern void* Barray_init_from_end(int bn, const size_t* init);
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -132,12 +133,16 @@ static inline char next_code_byte(context_t* c) {
     return v;
 }
 
+static inline void update_gc_stack_variables(context_t* c){
+    __gc_stack_top = ((size_t)c->stack.sp) - 4;
+}
+
 // move sp and write value
 static inline void push_stack(context_t* c, size_t v) {
     ASSERT(c->stack.sp >= c->stack.begin + sizeof(size_t), "Overflow stack");
     c->stack.sp--;
     *c->stack.sp = v;
-    __gc_stack_top = (size_t)c->stack.sp;
+    update_gc_stack_variables(c);
 }
 
 // move sp and write value
@@ -154,7 +159,7 @@ static inline size_t pop_stack(context_t* c) {
     ASSERT(c->stack.sp < c->stack.begin + c->stack.n, "Underflow stack");
     size_t v = *c->stack.sp;
     c->stack.sp++;
-    __gc_stack_top = (size_t)c->stack.sp;
+    update_gc_stack_variables(c);
     return v;
 }
 
@@ -166,7 +171,11 @@ static inline size_t pop_cstack(context_t* c) {
     return v;
 }
 
-static inline size_t pop_stack_unboxed(context_t* c) { return UNBOX(pop_stack(c)); }
+static inline size_t pop_stack_unboxed(context_t* c) {
+    size_t v = pop_stack(c);
+    ASSERT(UNBOXED(v), "expect unboxed");
+    return UNBOX(v);
+}
 
 static inline size_t is_stack_empty(context_t* c) { return c->stack.sp == c->stack.begin + c->stack.n; }
 
@@ -493,8 +502,11 @@ static inline void handle_call_string(context_t* c) {
 }
 
 static inline void handle_call_array(context_t* c) {
-    // fprintf(f, "CALL\tBarray\t%d", INT);
-    TODO("CALL Barray");
+    int n = next_code_int(c);
+    void* arr = Barray_init_from_end(BOX(n), c->stack.sp);
+    for (int i = 0; i < n; i++)
+        pop_stack(c);
+    push_stack(c, (size_t)arr);
 }
 
 /* Disassembles the bytecode pool */
@@ -518,7 +530,8 @@ void disassemble(FILE* f, bytefile* bf) {
 
     context.string_area = bf->string_ptr;
 
-    __gc_stack_top = __gc_stack_bottom = (size_t)context.stack.sp;
+    __gc_stack_bottom = (size_t)context.stack.sp;
+    update_gc_stack_variables(&context);
 
     push_stack_boxed(&context, 0);
     push_stack_boxed(&context, 0);  // because main's BEGIN 2 0

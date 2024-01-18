@@ -837,6 +837,24 @@ extern void *Barray (int bn, ...) {
   return r->contents;
 }
 
+extern void *Barray_init_from_end (int bn, const size_t* init) {
+  int     i, ai;
+  data   *r;
+  int     n = UNBOX(bn);
+
+  PRE_GC();
+
+  r = (data *)alloc_array(n);
+
+  for (i = 0; i < n; i++) {
+    ai                      = (int)init[i];
+    ((int *)r->contents)[n-1-i] = ai;
+  }
+
+  POST_GC();
+  return r->contents;
+}
+
 #ifdef DEBUG_VERSION
 extern memory_chunk heap;
 #endif
