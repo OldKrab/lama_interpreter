@@ -1,7 +1,8 @@
 DEBUG_FILES=stack-dump-before data-dump-before extra-roots-dump-before heap-dump-before stack-dump-after data-dump-after extra-roots-dump-after heap-dump-after
 TESTS=$(sort $(filter-out test111, $(basename $(wildcard test*.lama))))
 
-LAMAC=../src/lamac
+LAMAC=lamac
+LAMA_INTERPRETER=../../src/lama_interpreter
 
 .PHONY: check $(TESTS)
 
@@ -10,9 +11,9 @@ check: ctest111 $(TESTS)
 
 $(TESTS): %: %.lama
 	@echo "regression/$@"
-	@cat $@.input | LAMA=../runtime $(LAMAC) -i $< > $@.log && diff $@.log orig/$@.log
-	@cat $@.input | LAMA=../runtime $(LAMAC) -ds -s $< > $@.log && diff $@.log orig/$@.log
-	@LAMA=../runtime $(LAMAC) $< && cat $@.input | ./$@ > $@.log && diff $@.log orig/$@.log
+	$(LAMAC) -b $@.lama
+	$(LAMA_INTERPRETER) $@.bc < $@.input > $@.log
+	diff $@.log orig/$@.log
 
 ctest111:
 	@echo "regression/test111"
