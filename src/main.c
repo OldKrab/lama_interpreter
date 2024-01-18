@@ -21,6 +21,7 @@ extern void* Barray_init_from_end(int bn, const size_t* init);
 extern int LtagHash(char*);
 extern void* Bsexp_init_from_end(int bn, int tag, size_t* init);
 extern int Btag(void* d, int t, int n);
+extern void* Lstring(void* p);
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -269,8 +270,8 @@ static inline void handle_sti(context_t* c) {
 
 static inline void handle_sta(context_t* c) {
     void* value = (void*)pop_stack(c);
-    int idx_or_var = (int)pop_stack(c);
-    void* x = UNBOXED(idx_or_var) ? (void*)pop_stack(c) : 0;
+    size_t idx_or_var = pop_stack(c);
+    void* x = UNBOXED(idx_or_var) ? (void*)pop_stack(c) : (void*)idx_or_var;
     push_stack(c, (size_t)Bsta(value, idx_or_var, x));
 }
 
@@ -340,8 +341,9 @@ static inline void handle_ld(context_t* c, MEM mem) {
 }
 
 static inline void handle_lda(context_t* c, MEM mem) {
-    // ... fprintf(f, "G(%d)", INT);
-    TODO("LDA");
+    int idx = next_code_int(c);
+    size_t * v = get_memory(c, mem, idx);
+    push_stack(c, (size_t)v);
 }
 
 static inline void handle_st(context_t* c, MEM mem) {
@@ -501,8 +503,9 @@ static inline void handle_call_length(context_t* c) {
 }
 
 static inline void handle_call_string(context_t* c) {
-    // fprintf(f, "CALL\tLstring");
-    TODO("CALL Lstring");
+    void* v = (void*)pop_stack(c);
+    void* str = Lstring(v);
+    push_stack(c, (size_t)str);
 }
 
 static inline void handle_call_array(context_t* c) {
