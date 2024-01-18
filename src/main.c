@@ -15,7 +15,8 @@ extern int Lread();
 extern int Lwrite(int n);
 extern void* Bstring(void* p);
 extern int Llength(void* p);
-extern void *Belem (void *p, int i);
+extern void* Belem(void* p, int i);
+extern void* Bsta(void* v, int i, void* x);
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -238,7 +239,6 @@ static inline void handle_binop(context_t* c, char l) {
 static inline void handle_const(context_t* c) { push_stack_boxed(c, next_code_int(c)); }
 
 static inline void handle_string(context_t* c) {
-    // fprintf(f, "STRING\t%s", STRING);
     int idx = next_code_int(c);
     char* string = Bstring(get_string(c, idx));
     push_stack(c, (size_t)string);
@@ -255,8 +255,10 @@ static inline void handle_sti(context_t* c) {
 }
 
 static inline void handle_sta(context_t* c) {
-    // fprintf(f, "STA");
-    TODO("STA");
+    void* value = (void*)pop_stack(c);
+    int idx_or_var = (int)pop_stack(c);
+    void* x = UNBOXED(idx_or_var) ? (void*)pop_stack(c) : 0;
+    push_stack(c, (size_t)Bsta(value, idx_or_var, x));
 }
 
 /*
@@ -315,8 +317,8 @@ static inline void handle_swap(context_t* c) {
 }
 
 static inline void handle_elem(context_t* c) {
-    void* arr = (void*)pop_stack(c);
     size_t idx = pop_stack(c);
+    void* arr = (void*)pop_stack(c);
     void* elem = Belem(arr, idx);
     push_stack(c, (size_t)elem);
 }
@@ -482,7 +484,7 @@ static inline void handle_call_write(context_t* c) {
 static inline void handle_call_length(context_t* c) {
     void* str = (void*)pop_stack(c);
     int size = Llength(str);
-    push_stack_boxed(c, size);
+    push_stack(c, size);
 }
 
 static inline void handle_call_string(context_t* c) {
@@ -513,6 +515,8 @@ void disassemble(FILE* f, bytefile* bf) {
     context.code_start = bf->code_ptr;
     context.globals.p = (size_t*)bf->global_ptr;
     context.globals.n = bf->global_area_size;
+
+    context.string_area = bf->string_ptr;
 
     __gc_stack_top = __gc_stack_bottom = (size_t)context.stack.sp;
 
@@ -640,7 +644,6 @@ void disassemble(FILE* f, bytefile* bf) {
                         break;
                     case 2:
                         handle_call_length(&context);
-                        BOX(123);
                         break;
                     case 3:
                         handle_call_string(&context);
