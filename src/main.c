@@ -36,6 +36,14 @@ extern void* Bsexp_init_from_end(int bn, int tag, size_t* init);
 extern int Btag(void* d, int t, int n);
 extern void* Lstring(void* p);
 extern void* Bclosure_init_from_end(int bn, void* entry, size_t* init);
+extern int Bstring_patt(void* x, void* y);
+extern int Barray_patt(void* d, int n);
+extern int Bclosure_tag_patt(void* x);
+extern int Bstring_tag_patt(void* x);
+extern int Barray_tag_patt(void* x);
+extern int Bsexp_tag_patt(void* x);
+extern int Bboxed_patt(void* x);
+extern int Bunboxed_patt(void* x);
 
 extern size_t __gc_stack_top, __gc_stack_bottom;
 
@@ -52,6 +60,7 @@ typedef struct {
 } bytefile;
 
 #define STACK_SIZE (1 << 20)
+#define GLOBALS_SIZE (1 << 20)
 
 typedef struct {
     size_t* p;
@@ -94,7 +103,7 @@ static inline char next_code_byte(context_t* c) {
     return v;
 }
 
-static inline void update_gc_stack_variables(context_t* c) { __gc_stack_top = ((size_t)c->stack.sp) - 4; }
+static inline void update_gc_stack_top(context_t* c) { __gc_stack_top = ((size_t)c->stack.sp) - 4; }
 
 // for debug
 size_t get_stack_size(context_t* c) { return c->stack.begin + c->stack.n - c->stack.sp; }
@@ -104,7 +113,7 @@ static inline void push_stack(context_t* c, size_t v) {
     ASSERT(c->stack.sp >= c->stack.begin + sizeof(size_t), "Overflow stack");
     c->stack.sp--;
     *c->stack.sp = v;
-    update_gc_stack_variables(c);
+    update_gc_stack_top(c);
 }
 
 static inline void push_stack_boxed(context_t* c, size_t v) { push_stack(c, BOX(v)); }
@@ -114,14 +123,14 @@ static inline size_t pop_stack(context_t* c) {
     ASSERT(c->stack.sp < c->stack.begin + c->stack.n, "Underflow stack");
     size_t v = *c->stack.sp;
     c->stack.sp++;
-    update_gc_stack_variables(c);
+    update_gc_stack_top(c);
     return v;
 }
 
 static inline void drop_stack_n(context_t* c, size_t n) {
     ASSERT(c->stack.sp + n <= c->stack.begin + c->stack.n, "Underflow stack");
     c->stack.sp += n;
-    update_gc_stack_variables(c);
+    update_gc_stack_top(c);
 }
 
 static inline size_t pop_stack_unboxed(context_t* c) {
@@ -443,10 +452,32 @@ static inline void handle_line(context_t* c) {
     next_code_int(c);  // ignore
 }
 
-static inline void handle_patt(context_t* context, int l) {
-    char* pats[] = {"=str", "#string", "#array", "#sexp", "#ref", "#val", "#fun"};
-    // fprintf(f, "PATT\t%s", pats[l]);
-    TODO("PATT");
+static inline size_t do_patt(context_t* c, int op) {
+    // char* pats[] = {"=str", "#string", "#array", "#sexp", "#ref", "#val", "#fun"};
+    void* x = (void*)pop_stack(c);
+    switch (op) {
+        case 0: {
+            void* y = (void*)pop_stack(c);
+            return Bstring_patt(x, y);
+        }
+        case 1:
+            return Bstring_tag_patt(x);
+        case 2:
+            return Barray_tag_patt(x);
+        case 3:
+            return Bsexp_tag_patt(x);
+        case 4:
+            return Bboxed_patt(x);
+        case 5:
+            return Bunboxed_patt(x);
+        case 6:
+            return Bclosure_tag_patt(x);
+    }
+}
+
+static inline void handle_patt(context_t* c, int l) {
+    size_t res = do_patt(c, l);
+    push_stack(c, res);
 }
 
 static inline void handle_call_read(context_t* c) {
@@ -485,24 +516,26 @@ void disassemble(FILE* f, bytefile* bf) {
 
     __init();  // init lama gc
     context_t context;
-    context.stack.begin = malloc(STACK_SIZE * sizeof(int));
-    context.stack.n = STACK_SIZE;
-    context.stack.sp = context.stack.begin + context.stack.n;
-
-    context.cstack.begin = malloc(STACK_SIZE * sizeof(int));
+    size_t* data_mem = malloc(STACK_SIZE * sizeof(size_t) * 2 + GLOBALS_SIZE * sizeof(size_t));
+    context.cstack.begin = data_mem;
     context.cstack.n = STACK_SIZE;
     context.cstack.sp = context.cstack.begin + context.cstack.n;
 
+    context.stack.begin = data_mem + STACK_SIZE;
+    context.stack.n = STACK_SIZE;
+    context.stack.sp = context.stack.begin + context.stack.n;
+
+    context.globals.p = data_mem + STACK_SIZE * 2;
+    context.globals.n = GLOBALS_SIZE;
+
     context.ip = bf->code_ptr;
     context.code_start = bf->code_ptr;
-    context.globals.p = (size_t*)bf->global_ptr;
-    context.globals.n = bf->global_area_size;
 
     context.string_area = bf->string_ptr;
     context.is_closure = false;
 
-    __gc_stack_bottom = (size_t)context.stack.sp;
-    update_gc_stack_variables(&context);
+    __gc_stack_bottom = (size_t)(data_mem + STACK_SIZE * 2 + GLOBALS_SIZE);
+    update_gc_stack_top(&context);
 
     push_stack_boxed(&context, 0);
     push_stack_boxed(&context, 0);  // because main's BEGIN 2 0
