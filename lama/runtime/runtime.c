@@ -889,6 +889,31 @@ extern void *Bsexp (int bn, ...) {
   return (int *)r->contents;
 }
 
+extern void *Bsexp_init_from_end (int bn, int tag, size_t* init) {
+  int     i;
+  int     ai;
+  size_t *p;
+  data   *r;
+  int     n = UNBOX(bn);
+
+  PRE_GC();
+
+  r                = (data *)alloc_sexp(n);
+  ((sexp *)r)->tag = 0;
+
+
+  for (i = 0; i < n; i++) {
+    ai                       = (int)init[i];
+    ((int *)r->contents)[n-i] = ai;
+  }
+
+  ((sexp *)r)->tag = UNBOX(tag);
+
+
+  POST_GC();
+  return (int *)r->contents;
+}
+
 extern int Btag (void *d, int t, int n) {
   data *r;
 

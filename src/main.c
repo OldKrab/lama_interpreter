@@ -18,6 +18,9 @@ extern int Llength(void* p);
 extern void* Belem(void* p, int i);
 extern void* Bsta(void* v, int i, void* x);
 extern void* Barray_init_from_end(int bn, const size_t* init);
+extern int LtagHash(char*);
+extern void* Bsexp_init_from_end(int bn, int tag, size_t* init);
+extern int Btag(void* d, int t, int n);
 
 /* The unpacked representation of bytecode file */
 typedef struct {
@@ -133,9 +136,7 @@ static inline char next_code_byte(context_t* c) {
     return v;
 }
 
-static inline void update_gc_stack_variables(context_t* c){
-    __gc_stack_top = ((size_t)c->stack.sp) - 4;
-}
+static inline void update_gc_stack_variables(context_t* c) { __gc_stack_top = ((size_t)c->stack.sp) - 4; }
 
 // move sp and write value
 static inline void push_stack(context_t* c, size_t v) {
@@ -254,9 +255,12 @@ static inline void handle_string(context_t* c) {
 }
 
 static inline void handle_sexp(context_t* c) {
-    // fprintf(f, "SEXP\t%s ", STRING);
-    // fprintf(f, "%d", INT);
-    TODO("SEXP");
+    char* tag = get_string(c, next_code_int(c));
+    int n = next_code_int(c);
+    void* sexp = Bsexp_init_from_end(BOX(n), LtagHash(tag), c->stack.sp);
+    for (int i = 0; i < n; i++)
+        pop_stack(c);
+    push_stack(c, (size_t)sexp);
 }
 static inline void handle_sti(context_t* c) {
     // fprintf(f, "STI");
@@ -315,10 +319,7 @@ static inline void handle_ret(context_t* c) {
 
 static inline void handle_drop(context_t* c) { pop_stack(c); }
 
-static inline void handle_dup(context_t* c) {
-    // fprintf(f, "DUP");
-    TODO("DUP");
-}
+static inline void handle_dup(context_t* c) { push_stack(c, peek_stack(c)); }
 
 static inline void handle_swap(context_t* c) {
     // fprintf(f, "SWAP");
@@ -454,9 +455,12 @@ static inline void handle_call(context_t* c) {
 }
 
 static inline void handle_tag(context_t* c) {
-    // fprintf(f, "TAG\t%s ", STRING);
-    // fprintf(f, "%d", INT);
-    TODO("TAG");
+    // check that on stack sexpr with tag and n args
+    char* tag = get_string(c, next_code_int(c));
+    int n = next_code_int(c);
+    void* x = (void*)pop_stack(c);
+    int res = Btag(x, LtagHash(tag), BOX(n));
+    push_stack(c, res);
 }
 
 static inline void handle_array(context_t* c) {
