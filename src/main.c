@@ -220,35 +220,49 @@ static inline size_t* get_memory(context_t* c, MEM mem, int idx) {
 /* handlers of instructions */
 
 static inline int32_t do_binop(int32_t x, int32_t y, char op) {
-    // char* ops[] = {"+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "!!"};
+    const int OP_ADD = 0;
+    const int OP_SUBTRACT = 1;
+    const int OP_MULTIPLY = 2;
+    const int OP_DIVIDE = 3;
+    const int OP_MODULO = 4;
+    const int OP_LESS_THAN = 5;
+    const int OP_LESS_THAN_OR_EQUAL = 6;
+    const int OP_GREATER_THAN = 7;
+    const int OP_GREATER_THAN_OR_EQUAL = 8;
+    const int OP_EQUAL = 9;
+    const int OP_NOT_EQUAL = 10;
+    const int OP_AND = 11;
+    const int OP_OR = 12;
     switch (op) {
-        case 0:
+        case OP_ADD:
             return x + y;
-        case 1:
+        case OP_SUBTRACT:
             return x - y;
-        case 2:
+        case OP_MULTIPLY:
             return x * y;
-        case 3:
+        case OP_DIVIDE:
             return x / y;
-        case 4:
+        case OP_MODULO:
             return x % y;
-        case 5:
+        case OP_LESS_THAN:
             return x < y;
-        case 6:
+        case OP_LESS_THAN_OR_EQUAL:
             return x <= y;
-        case 7:
+        case OP_GREATER_THAN:
             return x > y;
-        case 8:
+        case OP_GREATER_THAN_OR_EQUAL:
             return x >= y;
-        case 9:
+        case OP_EQUAL:
             return x == y;
-        case 10:
+        case OP_NOT_EQUAL:
             return x != y;
-        case 11:
+        case OP_AND:
             return x && y;
-        case 12:
+        case OP_OR:
             return x || y;
     }
+    failure("Unknown operation");
+    return 0;
 }
 
 static inline void handle_binop(context_t* c, char l) {
@@ -501,24 +515,31 @@ static inline void handle_line(context_t* c) {
 }
 
 static inline size_t do_patt(context_t* c, int op) {
-    // char* pats[] = {"=str", "#string", "#array", "#sexp", "#ref", "#val", "#fun"};
+    const int OPERATION_STRING_PATT = 0;
+    const int OPERATION_STRING_TAG_PATT = 1;
+    const int OPERATION_ARRAY_TAG_PATT = 2;
+    const int OPERATION_SEXP_TAG_PATT = 3;
+    const int OPERATION_BOXED_PATT = 4;
+    const int OPERATION_UNBOXED_PATT = 5;
+    const int OPERATION_CLOSURE_TAG_PATT = 6;
+
     void* x = (void*)pop_stack(c);
     switch (op) {
-        case 0: {
+        case OPERATION_STRING_PATT: {
             void* y = (void*)pop_stack(c);
             return Bstring_patt(x, y);
         }
-        case 1:
+        case OPERATION_STRING_TAG_PATT:
             return Bstring_tag_patt(x);
-        case 2:
+        case OPERATION_ARRAY_TAG_PATT:
             return Barray_tag_patt(x);
-        case 3:
+        case OPERATION_SEXP_TAG_PATT:
             return Bsexp_tag_patt(x);
-        case 4:
+        case OPERATION_BOXED_PATT:
             return Bboxed_patt(x);
-        case 5:
+        case OPERATION_UNBOXED_PATT:
             return Bunboxed_patt(x);
-        case 6:
+        case OPERATION_CLOSURE_TAG_PATT:
             return Bclosure_tag_patt(x);
     }
 }
@@ -560,6 +581,46 @@ static inline void handle_call_array(context_t* c) {
 /* Disassembles the bytecode pool */
 void disassemble(FILE* f, bytefile* bf) {
 #define FAIL failure("ERROR: invalid opcode %d-%d\n", h, l)
+    const int INSTRUCTION_EXIT = 15;
+    const int INSTRUCTION_BINOP = 0;
+    const int INSTRUCTION_DATA = 1;
+    const int INSTRUCTION_LD = 2;
+    const int INSTRUCTION_LDA = 3;
+    const int INSTRUCTION_ST = 4;
+    const int INSTRUCTION_CONTROL = 5;
+    const int INSTRUCTION_PATT = 6;
+    const int INSTRUCTION_CALL = 7;
+
+    const int DATA_CONST = 0;
+    const int DATA_STRING = 1;
+    const int DATA_SEXP = 2;
+    const int DATA_STI = 3;
+    const int DATA_STA = 4;
+    const int DATA_JUMP = 5;
+    const int DATA_END = 6;
+    const int DATA_RET = 7;
+    const int DATA_DROP = 8;
+    const int DATA_DUP = 9;
+    const int DATA_SWAP = 10;
+    const int DATA_ELEM = 11;
+
+    const int CONTROL_CJMPZ = 0;
+    const int CONTROL_CJMPNZ = 1;
+    const int CONTROL_BEGIN = 2;
+    const int CONTROL_CBEGIN = 3;
+    const int CONTROL_CLOJURE = 4;
+    const int CONTROL_CALLC = 5;
+    const int CONTROL_CALL = 6;
+    const int CONTROL_TAG = 7;
+    const int CONTROL_ARRAY = 8;
+    const int CONTROL_FAIL = 9;
+    const int CONTROL_LINE = 10;
+
+    const int CALL_READ = 0;
+    const int CALL_WRITE = 1;
+    const int CALL_LENGTH = 2;
+    const int CALL_STRING = 3;
+    const int CALL_ARRAY = 4;
 
     __init();  // init lama gc
     context_t context;
@@ -596,51 +657,50 @@ void disassemble(FILE* f, bytefile* bf) {
         char x = next_code_byte(&context), h = (x & 0xF0) >> 4, l = x & 0x0F;
 
         switch (h) {
-            case 15:
+            case INSTRUCTION_EXIT:
                 return;
 
-            /* BINOP */
-            case 0:
+            case INSTRUCTION_BINOP:
                 handle_binop(&context, l);
                 break;
 
-            case 1:
+            case INSTRUCTION_DATA:
                 switch (l) {
-                    case 0:
+                    case DATA_CONST:
                         handle_const(&context);
                         break;
-                    case 1:
+                    case DATA_STRING:
                         handle_string(&context);
                         break;
-                    case 2:
+                    case DATA_SEXP:
                         handle_sexp(&context);
                         break;
-                    case 3:
+                    case DATA_STI:
                         handle_sti(&context);
                         break;
-                    case 4:
+                    case DATA_STA:
                         handle_sta(&context);
                         break;
-                    case 5:
+                    case DATA_JUMP:
                         handle_jump(&context);
                         break;
-                    case 6:
+                    case DATA_END:
                         if (handle_end(&context))
                             return;
                         break;
-                    case 7:
+                    case DATA_RET:
                         handle_ret(&context);
                         break;
-                    case 8:
+                    case DATA_DROP:
                         handle_drop(&context);
                         break;
-                    case 9:
+                    case DATA_DUP:
                         handle_dup(&context);
                         break;
-                    case 10:
+                    case DATA_SWAP:
                         handle_swap(&context);
                         break;
-                    case 11:
+                    case DATA_ELEM:
                         handle_elem(&context);
                         break;
                     default:
@@ -648,49 +708,49 @@ void disassemble(FILE* f, bytefile* bf) {
                 }
                 break;
 
-            case 2:
+            case INSTRUCTION_LD:
                 handle_ld(&context, l);
                 break;
-            case 3:
+            case INSTRUCTION_LDA:
                 handle_lda(&context, l);
                 break;
-            case 4:
+            case INSTRUCTION_ST:
                 handle_st(&context, l);
                 break;
 
-            case 5:
+            case INSTRUCTION_CONTROL:
                 switch (l) {
-                    case 0:
+                    case CONTROL_CJMPZ:
                         handle_cjmpz(&context);
                         break;
-                    case 1:
+                    case CONTROL_CJMPNZ:
                         handle_cjmpnz(&context);
                         break;
-                    case 2:
+                    case CONTROL_BEGIN:
                         handle_begin(&context);
                         break;
-                    case 3:
+                    case CONTROL_CBEGIN:
                         handle_cbegin(&context);
                         break;
-                    case 4:
+                    case CONTROL_CLOJURE:
                         handle_clojure(&context);
                         break;
-                    case 5:
+                    case CONTROL_CALLC:
                         handle_callc(&context);
                         break;
-                    case 6:
+                    case CONTROL_CALL:
                         handle_call(&context);
                         break;
-                    case 7:
+                    case CONTROL_TAG:
                         handle_tag(&context);
                         break;
-                    case 8:
+                    case CONTROL_ARRAY:
                         handle_array(&context);
                         break;
-                    case 9:
+                    case CONTROL_FAIL:
                         handle_fail(&context);
                         break;
-                    case 10:
+                    case CONTROL_LINE:
                         handle_line(&context);
                         break;
                     default:
@@ -698,31 +758,31 @@ void disassemble(FILE* f, bytefile* bf) {
                 }
                 break;
 
-            case 6:
+            case INSTRUCTION_PATT:
                 handle_patt(&context, l);
                 break;
 
-            case 7: {
+            case INSTRUCTION_CALL:
                 switch (l) {
-                    case 0:
+                    case CALL_READ:
                         handle_call_read(&context);
                         break;
-                    case 1:
+                    case CALL_WRITE:
                         handle_call_write(&context);
                         break;
-                    case 2:
+                    case CALL_LENGTH:
                         handle_call_length(&context);
                         break;
-                    case 3:
+                    case CALL_STRING:
                         handle_call_string(&context);
                         break;
-                    case 4:
+                    case CALL_ARRAY:
                         handle_call_array(&context);
                         break;
                     default:
                         FAIL;
                 }
-            } break;
+                break;
 
             default:
                 FAIL;
