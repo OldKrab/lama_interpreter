@@ -23,7 +23,7 @@
         }                                           \
     while (0)
 #else
-#define ASSERT(...) 
+#define ASSERT(...)
 #endif
 
 /*  Lama runtime functions  */
@@ -112,14 +112,16 @@ static inline void set_ip(context_t* c, uint8_t* to) {
 }
 
 static inline int next_code_int(context_t* c) {
+    ASSERT(c->ip + sizeof(int) < c->code.p + c->code.n, "Out of bounds bytecode");
     int v = *(int*)c->ip;
-    set_ip(c, c->ip + sizeof(int));
+    c->ip += sizeof(int);
     return v;
 }
 
 static inline uint8_t next_code_byte(context_t* c) {
+    ASSERT(c->ip + 1 < c->code.p + c->code.n, "Out of bounds bytecode");
     uint8_t v = *c->ip;
-    set_ip(c, c->ip + 1);
+    c->ip++;
     return v;
 }
 
@@ -143,23 +145,22 @@ static inline void init_closed(context_t* c) {
     c->closed.p = (size_t*)closure + 1;
 }
 
-size_t get_stack_size(context_t* c) { return c->stack.p + c->stack.n - get_stack_sp(); }
+static inline size_t get_stack_size(context_t* c) { return c->stack.p + c->stack.n - get_stack_sp(); }
 
 // move sp and write value
 static inline void push_stack(context_t* c, size_t v) {
-    size_t* sp = get_stack_sp();
-    set_stack_sp(c, sp - 1);
-    *(sp - 1) = v;
+    ASSERT(c->stack.p <= (size_t*)__gc_stack_top, "Overflow stack");
+    *((size_t*)__gc_stack_top) = v;
+    __gc_stack_top -= 4;
 }
 
 static inline void push_stack_boxed(context_t* c, size_t v) { push_stack(c, BOX(v)); }
 
 // read value and move sp
 static inline size_t pop_stack(context_t* c) {
-    size_t* sp = get_stack_sp();
-    size_t v = *sp;
-    set_stack_sp(c, sp + 1);
-    return v;
+    ASSERT((size_t*)__gc_stack_top < c->stack.p + c->stack.n, "Underflow stack");
+    __gc_stack_top += 4;
+    return *((size_t*)__gc_stack_top);
 }
 
 static inline void drop_stack_n(context_t* c, size_t n) { set_stack_sp(c, get_stack_sp() + n); }
@@ -295,7 +296,7 @@ static inline void handle_sexp(context_t* c) {
 static inline void handle_sti(context_t* c) {
     size_t value = pop_stack(c);
     size_t var = pop_stack(c);
-    *(size_t *)var = value;
+    *(size_t*)var = value;
 }
 
 static inline void handle_sta(context_t* c) {
@@ -476,7 +477,7 @@ static inline void handle_call(context_t* c) {
 }
 
 static inline void handle_ret(context_t* c) {
-    handle_end(c); // they same in lama ocaml realisation
+    handle_end(c);  // they same in lama ocaml realisation
 }
 
 static inline void handle_clojure(context_t* c) {
