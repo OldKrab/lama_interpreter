@@ -219,7 +219,7 @@ static inline size_t* get_memory(context_t* c, MEM mem, int idx) {
 
 /* handlers of instructions */
 
-static inline int32_t do_binop(int32_t x, int32_t y, char op) {
+static inline int32_t do_binop(int32_t x, int32_t y, uint8_t op) {
     const int OP_ADD = 0;
     const int OP_SUBTRACT = 1;
     const int OP_MULTIPLY = 2;
@@ -265,7 +265,7 @@ static inline int32_t do_binop(int32_t x, int32_t y, char op) {
     return 0;
 }
 
-static inline void handle_binop(context_t* c, char l) {
+static inline void handle_binop(context_t* c, uint8_t l) {
     int32_t y = UNBOX((int32_t)pop_stack(c));
     int32_t x = UNBOX((int32_t)pop_stack(c));
     int32_t res = do_binop(x, y, l - 1);
@@ -476,7 +476,7 @@ static inline void handle_ret(context_t* c) {
 }
 
 static inline void handle_clojure(context_t* c) {
-    char* closure_offset = (char*)next_code_int(c);
+    uint8_t* closure_offset = (uint8_t*)next_code_int(c);
     int closed_n = next_code_int(c);
     for (int i = 0; i < closed_n; i++) {
         MEM mem = (MEM)next_code_byte(c);
@@ -657,7 +657,7 @@ void disassemble(FILE* f, bytefile* bf) {
     context.bp = get_stack_sp();
 
     do {
-        char x = next_code_byte(&context), h = (x & 0xF0) >> 4, l = x & 0x0F;
+        uint8_t x = next_code_byte(&context), h = (x & 0xF0) >> 4, l = x & 0x0F;
 
         switch (h) {
             case INSTRUCTION_EXIT:
