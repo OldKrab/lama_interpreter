@@ -7,6 +7,7 @@
 #include "../lama/runtime/gc.h"
 #include "../lama/runtime/runtime.h"
 #include "../lama/runtime/runtime_common.h"
+#include "stdint.h"
 
 #define TODO(what)                           \
     do                                       \
@@ -50,6 +51,7 @@ typedef struct {
     char* string_ptr;          /* A pointer to the beginning of the string table */
     int* public_ptr;           /* A pointer to the beginning of publics table    */
     char* code_ptr;            /* A pointer to the bytecode itself               */
+    size_t code_size;          /* A size of the bytecode                         */
     int* global_ptr;           /* A pointer to the global area                   */
     int stringtab_size;        /* The size (in bytes) of the string table        */
     int global_area_size;      /* The size (in words) of global area             */
@@ -65,6 +67,11 @@ typedef struct {
 } slice_t;
 
 typedef struct {
+    uint8_t* p;
+    size_t n;
+} byte_slice_t;
+
+typedef struct {
     size_t* begin;
     size_t* sp;
     size_t n;
@@ -77,9 +84,9 @@ typedef struct {
     slice_t locals;
     slice_t closed;
     slice_t globals;
-    char* code_start;
+    byte_slice_t code;
     char* string_area;
-    char* ip;
+    uint8_t* ip;
     size_t* bp;
     bool is_closure;
 } context_t;
@@ -88,15 +95,20 @@ typedef struct {
 
 static inline char* get_string(context_t* c, int idx) { return &c->string_area[idx]; }
 
+static inline void set_ip(context_t* c, uint8_t* to) {
+    ASSERT(c->code.p <= to && to < c->code.p + c->code.n, "Out of bound bytecode");
+    c->ip = to;
+}
+
 static inline int next_code_int(context_t* c) {
     int v = *(int*)c->ip;
-    c->ip += sizeof(int);
+    set_ip(c, c->ip + sizeof(int));
     return v;
 }
 
-static inline char next_code_byte(context_t* c) {
-    char v = *c->ip;
-    c->ip++;
+static inline uint8_t next_code_byte(context_t* c) {
+    uint8_t v = *c->ip;
+    set_ip(c, c->ip + 1);
     return v;
 }
 
@@ -108,7 +120,7 @@ static inline void* get_closure_from_stack(context_t* c) {
 }
 
 static inline void init_closed(context_t* c) {
-    data* closure = get_closure_from_stack(c);
+    void* closure = get_closure_from_stack(c);
     c->closed.n = LEN(TO_DATA(closure)->data_header) - 1;
     c->closed.p = (size_t*)closure + 1;
 }
@@ -250,8 +262,7 @@ static inline void handle_sexp(context_t* c) {
     char* tag = get_string(c, next_code_int(c));
     int n = next_code_int(c);
     void* sexp = Bsexp_init_from_end(BOX(n), LtagHash(tag), c->stack.sp);
-    for (int i = 0; i < n; i++)
-        pop_stack(c);
+    drop_stack_n(c, n);
     push_stack(c, (size_t)sexp);
 }
 static inline void handle_sti(context_t* c) {
@@ -310,19 +321,19 @@ static inline void handle_cjmpz(context_t* c) {
     int offset = next_code_int(c);
     size_t cond = pop_stack_unboxed(c);
     if (cond == 0)
-        c->ip = c->code_start + offset;
+        set_ip(c, c->code.p + offset);
 }
 
 static inline void handle_cjmpnz(context_t* c) {
     int offset = next_code_int(c);
     size_t cond = pop_stack_unboxed(c);
     if (cond != 0)
-        c->ip = c->code_start + offset;
+        set_ip(c, c->code.p + offset);
 }
 
 static inline void handle_jump(context_t* c) {
     int offset = next_code_int(c);
-    c->ip = c->code_start + offset;
+    set_ip(c, c->code.p + offset);
 }
 
 /*
@@ -407,7 +418,7 @@ static inline bool handle_end(context_t* c) {
     c->locals.n = pop_cstack(c);
     c->args.n = pop_cstack(c);
     c->is_closure = (bool)pop_cstack(c);
-    c->ip = (char*)pop_cstack(c);
+    set_ip(c, (uint8_t*)pop_cstack(c));
 
     c->locals.p = c->bp - c->locals.n;
     c->args.p = c->bp + (c->args.n - 1);
@@ -418,8 +429,6 @@ static inline bool handle_end(context_t* c) {
     return false;
 }
 
-
-
 static inline void handle_callc(context_t* c) {
     int args_n = next_code_int(c);
     void* closure = (void*)peek_stack_i(c, args_n);
@@ -427,7 +436,7 @@ static inline void handle_callc(context_t* c) {
     push_cstack(c, (size_t)(c->ip));
     push_cstack(c, (size_t)c->is_closure);
 
-    c->ip = c->code_start + closure_offset;
+    set_ip(c, c->code.p + closure_offset);
     c->is_closure = true;
 }
 
@@ -437,7 +446,7 @@ static inline void handle_call(context_t* c) {
     push_cstack(c, (size_t)(c->ip));
     push_cstack(c, (size_t)c->is_closure);
 
-    c->ip = c->code_start + offset;
+    set_ip(c, c->code.p + offset);
     c->is_closure = false;
 }
 
@@ -452,9 +461,7 @@ static inline void handle_clojure(context_t* c) {
 
     void* closure = Bclosure_init_from_end(BOX(closed_n), closure_offset, c->stack.sp);
 
-    for (int i = 0; i < closed_n; i++) {
-        pop_stack(c);
-    }
+    drop_stack_n(c, closed_n);
 
     push_stack(c, (size_t)closure);
 }
@@ -538,8 +545,7 @@ static inline void handle_call_string(context_t* c) {
 static inline void handle_call_array(context_t* c) {
     int n = next_code_int(c);
     void* arr = Barray_init_from_end(BOX(n), c->stack.sp);
-    for (int i = 0; i < n; i++)
-        pop_stack(c);
+    drop_stack_n(c, n);
     push_stack(c, (size_t)arr);
 }
 
@@ -561,8 +567,9 @@ void disassemble(FILE* f, bytefile* bf) {
 
     context.globals.p = data_mem + STACK_SIZE * 2;
     context.globals.n = global_size;
-    context.ip = bf->code_ptr;
-    context.code_start = bf->code_ptr;
+    context.code.p = (uint8_t*)bf->code_ptr;
+    context.code.n = bf->code_size;
+    set_ip(&context, context.code.p);
 
     context.string_area = bf->string_ptr;
     context.is_closure = false;
@@ -727,7 +734,7 @@ bytefile* read_file(char* fname) {
         failure("%s\n", strerror(errno));
     }
 
-    file = (bytefile*)malloc(sizeof(int) * 4 + (size = ftell(f)));
+    file = (bytefile*)malloc(sizeof(bytefile) + (size = ftell(f)));
 
     if (file == 0) {
         failure("*** FAILURE: unable to allocate memory.\n");
@@ -744,6 +751,7 @@ bytefile* read_file(char* fname) {
     file->string_ptr = &file->buffer[file->public_symbols_number * 2 * sizeof(int)];
     file->public_ptr = (int*)file->buffer;
     file->code_ptr = &file->string_ptr[file->stringtab_size];
+    file->code_size = size - (file->public_symbols_number * 2 * sizeof(int)) - file->stringtab_size;
     file->global_ptr = (int*)malloc(file->global_area_size * sizeof(int));
 
     return file;
