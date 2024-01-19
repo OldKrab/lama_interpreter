@@ -287,9 +287,11 @@ static inline void handle_sexp(context_t* c) {
     drop_stack_n(c, n);
     push_stack(c, (size_t)sexp);
 }
+
 static inline void handle_sti(context_t* c) {
-    // fprintf(f, "STI");
-    TODO("STI");
+    size_t value = pop_stack(c);
+    size_t var = pop_stack(c);
+    *(size_t *)var = value;
 }
 
 static inline void handle_sta(context_t* c) {
@@ -299,18 +301,15 @@ static inline void handle_sta(context_t* c) {
     push_stack(c, (size_t)Bsta(value, idx_or_var, x));
 }
 
-static inline void handle_ret(context_t* c) {
-    // fprintf(f, "RET");
-    TODO("RET");
-}
-
 static inline void handle_drop(context_t* c) { pop_stack(c); }
 
 static inline void handle_dup(context_t* c) { push_stack(c, peek_stack(c)); }
 
 static inline void handle_swap(context_t* c) {
-    // fprintf(f, "SWAP");
-    TODO("SWAP");
+    size_t x = pop_stack(c);
+    size_t y = pop_stack(c);
+    push_stack(c, x);
+    push_stack(c, y);
 }
 
 static inline void handle_elem(context_t* c) {
@@ -472,6 +471,10 @@ static inline void handle_call(context_t* c) {
     c->is_closure = false;
 }
 
+static inline void handle_ret(context_t* c) {
+    handle_end(c); // they same in lama ocaml realisation
+}
+
 static inline void handle_clojure(context_t* c) {
     char* closure_offset = (char*)next_code_int(c);
     int closed_n = next_code_int(c);
@@ -505,9 +508,9 @@ static inline void handle_array(context_t* c) {
 }
 
 static inline void handle_fail(context_t* c) {
-    // fprintf(f, "FAIL\t%d", INT);
-    // fprintf(f, "%d", INT);
-    TODO("FAIL");
+    int x = next_code_int(c);
+    int y = next_code_int(c);
+    failure("fail: %d, %d");
 }
 
 static inline void handle_line(context_t* c) {
