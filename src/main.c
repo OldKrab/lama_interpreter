@@ -72,6 +72,11 @@ typedef struct {
 } byte_slice_t;
 
 typedef struct {
+    char* p;
+    size_t n;
+} char_slice_t;
+
+typedef struct {
     size_t* begin;
     size_t* sp;
     size_t n;
@@ -85,7 +90,7 @@ typedef struct {
     slice_t closed;
     slice_t globals;
     byte_slice_t code;
-    char* string_area;
+    char_slice_t string_area;
     uint8_t* ip;
     size_t* bp;
     bool is_closure;
@@ -93,10 +98,13 @@ typedef struct {
 
 /* Context functions */
 
-static inline char* get_string(context_t* c, int idx) { return &c->string_area[idx]; }
+static inline char* get_string(context_t* c, int idx) {
+    ASSERT(0 <= idx && idx < c->string_area.n, "Out of bounds string area");
+    return &c->string_area.p[idx];
+}
 
 static inline void set_ip(context_t* c, uint8_t* to) {
-    ASSERT(c->code.p <= to && to < c->code.p + c->code.n, "Out of bound bytecode");
+    ASSERT(c->code.p <= to && to < c->code.p + c->code.n, "Out of bounds bytecode");
     c->ip = to;
 }
 
@@ -571,7 +579,8 @@ void disassemble(FILE* f, bytefile* bf) {
     context.code.n = bf->code_size;
     set_ip(&context, context.code.p);
 
-    context.string_area = bf->string_ptr;
+    context.string_area.p = bf->string_ptr;
+    context.string_area.n = bf->stringtab_size;
     context.is_closure = false;
 
     __gc_stack_bottom = (size_t)(data_mem + STACK_SIZE * 2 + global_size);
