@@ -1,13 +1,13 @@
 
 #include <errno.h>
 #include <malloc.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "../lama/runtime/gc.h"
 #include "../lama/runtime/runtime.h"
 #include "../lama/runtime/runtime_common.h"
-#include "stdint.h"
 
 #define TODO(what)                           \
     do                                       \
@@ -82,7 +82,7 @@ typedef struct {
 } stack_t;
 
 typedef struct {
-    stack_t stack;
+    slice_t stack;
     stack_t cstack;
     slice_t args;
     slice_t locals;
@@ -119,7 +119,14 @@ static inline uint8_t next_code_byte(context_t* c) {
     return v;
 }
 
-static inline void update_gc_stack_top(context_t* c) { __gc_stack_top = ((size_t)c->stack.sp) - 4; }
+static inline size_t* get_stack_sp() { return (size_t*)(__gc_stack_top + 4); }
+
+static inline void set_stack_sp(context_t* c, const size_t* to) {
+    ASSERT(c->stack.p <= to, "Overflow stack");
+    ASSERT(to <= c->stack.p + c->stack.n, "Underflow stack");
+
+    __gc_stack_top = (size_t)to - 4;
+}
 
 static inline void* get_closure_from_stack(context_t* c) {
     ASSERT(c->is_closure, "not in closure");
@@ -132,33 +139,26 @@ static inline void init_closed(context_t* c) {
     c->closed.p = (size_t*)closure + 1;
 }
 
-// for debug
-size_t get_stack_size(context_t* c) { return c->stack.begin + c->stack.n - c->stack.sp; }
+size_t get_stack_size(context_t* c) { return c->stack.p + c->stack.n - get_stack_sp(); }
 
 // move sp and write value
 static inline void push_stack(context_t* c, size_t v) {
-    ASSERT(c->stack.sp >= c->stack.begin + sizeof(size_t), "Overflow stack");
-    c->stack.sp--;
-    *c->stack.sp = v;
-    update_gc_stack_top(c);
+    size_t* sp = get_stack_sp();
+    set_stack_sp(c, sp - 1);
+    *(sp - 1) = v;
 }
 
 static inline void push_stack_boxed(context_t* c, size_t v) { push_stack(c, BOX(v)); }
 
 // read value and move sp
 static inline size_t pop_stack(context_t* c) {
-    ASSERT(c->stack.sp < c->stack.begin + c->stack.n, "Underflow stack");
-    size_t v = *c->stack.sp;
-    c->stack.sp++;
-    update_gc_stack_top(c);
+    size_t* sp = get_stack_sp();
+    size_t v = *sp;
+    set_stack_sp(c, sp + 1);
     return v;
 }
 
-static inline void drop_stack_n(context_t* c, size_t n) {
-    ASSERT(c->stack.sp + n <= c->stack.begin + c->stack.n, "Underflow stack");
-    c->stack.sp += n;
-    update_gc_stack_top(c);
-}
+static inline void drop_stack_n(context_t* c, size_t n) { set_stack_sp(c, get_stack_sp() + n); }
 
 static inline size_t pop_stack_unboxed(context_t* c) {
     size_t v = pop_stack(c);
@@ -166,11 +166,12 @@ static inline size_t pop_stack_unboxed(context_t* c) {
     return UNBOX(v);
 }
 
-static inline size_t is_stack_empty(context_t* c) { return c->stack.sp == c->stack.begin + c->stack.n; }
+static inline size_t is_stack_empty(context_t* c) { return get_stack_size(c) == 0; }
 
 static inline size_t peek_stack_i(context_t* c, size_t i) {
-    ASSERT(c->cstack.sp + i < c->cstack.begin + c->cstack.n, "Out of bounds of stack");
-    return c->stack.sp[i];
+    size_t* p = get_stack_sp() + i;
+    ASSERT(c->stack.p < p && p < c->stack.p + c->stack.n, "Out of bounds stack");
+    return *p;
 }
 
 static inline size_t peek_stack(context_t* c) { return peek_stack_i(c, 0); }
@@ -268,7 +269,7 @@ static inline void handle_string(context_t* c) {
 static inline void handle_sexp(context_t* c) {
     char* tag = get_string(c, next_code_int(c));
     int n = next_code_int(c);
-    void* sexp = Bsexp_init_from_end(BOX(n), LtagHash(tag), c->stack.sp);
+    void* sexp = Bsexp_init_from_end(BOX(n), LtagHash(tag), get_stack_sp());
     drop_stack_n(c, n);
     push_stack(c, (size_t)sexp);
 }
@@ -373,14 +374,14 @@ static inline void handle_begin(context_t* c) {
     size_t prev_args_n = c->args.n;
     size_t prev_locals_n = c->locals.n;
     size_t* prev_bp = c->bp;
+    c->bp = get_stack_sp();
     c->args.n = next_code_int(c);
-    c->args.p = c->stack.sp + c->args.n - 1;
+    c->args.p = c->bp + c->args.n - 1;
     c->locals.n = next_code_int(c);
-    c->bp = c->stack.sp;
     for (int i = 0; i < c->locals.n; i++) {
         push_stack_boxed(c, 0);
     }
-    c->locals.p = c->stack.sp;
+    c->locals.p = get_stack_sp();
     c->closed.n = 0;
     c->closed.p = 0;
 
@@ -466,7 +467,7 @@ static inline void handle_clojure(context_t* c) {
         push_stack(c, *get_memory(c, mem, idx));
     }
 
-    void* closure = Bclosure_init_from_end(BOX(closed_n), closure_offset, c->stack.sp);
+    void* closure = Bclosure_init_from_end(BOX(closed_n), closure_offset, get_stack_sp());
 
     drop_stack_n(c, closed_n);
 
@@ -551,7 +552,7 @@ static inline void handle_call_string(context_t* c) {
 
 static inline void handle_call_array(context_t* c) {
     int n = next_code_int(c);
-    void* arr = Barray_init_from_end(BOX(n), c->stack.sp);
+    void* arr = Barray_init_from_end(BOX(n), get_stack_sp());
     drop_stack_n(c, n);
     push_stack(c, (size_t)arr);
 }
@@ -568,13 +569,12 @@ void disassemble(FILE* f, bytefile* bf) {
     context.cstack.n = STACK_SIZE;
     context.cstack.sp = context.cstack.begin + context.cstack.n;
 
-    context.stack.begin = data_mem + STACK_SIZE;
+    context.stack.p = data_mem + STACK_SIZE;
     context.stack.n = STACK_SIZE;
-    context.stack.sp = context.stack.begin + context.stack.n;
 
     context.globals.p = data_mem + STACK_SIZE * 2;
     context.globals.n = global_size;
-    for(int i = 0; i < global_size; i++)
+    for (int i = 0; i < global_size; i++)
         context.globals.p[i] = 0;
 
     context.code.p = (uint8_t*)bf->code_ptr;
@@ -585,12 +585,12 @@ void disassemble(FILE* f, bytefile* bf) {
     context.string_area.n = bf->stringtab_size;
     context.is_closure = false;
 
+    set_stack_sp(&context, context.stack.p + context.stack.n);
     __gc_stack_bottom = (size_t)(data_mem + STACK_SIZE * 2 + global_size);
-    update_gc_stack_top(&context);
 
     push_stack_boxed(&context, 0);
     push_stack_boxed(&context, 0);  // because main's BEGIN 2 0
-    context.bp = context.stack.sp;
+    context.bp = get_stack_sp();
 
     do {
         char x = next_code_byte(&context), h = (x & 0xF0) >> 4, l = x & 0x0F;
