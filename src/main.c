@@ -14,6 +14,7 @@
         failure("Unimplemented " what "\n"); \
     while (0)
 
+#ifndef NDEBUG
 #define VA_ARGS(...) , ##__VA_ARGS__
 #define ASSERT(cond, fmt, ...)                      \
     do                                              \
@@ -21,6 +22,9 @@
             failure(fmt "\n" VA_ARGS(__VA_ARGS__)); \
         }                                           \
     while (0)
+#else
+#define ASSERT(...) 
+#endif
 
 /*  Lama runtime functions  */
 extern int Lread();

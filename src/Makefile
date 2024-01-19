@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS = -m32 -g -O2 -std=gnu11
+CFLAGS = -m32 -g -O2 -std=gnu11 -DNDEBUG
 TARGET = lama_interpreter
 
 .PHONY: clean lama_runtime
