@@ -52,7 +52,6 @@ typedef struct {
     int* public_ptr;           /* A pointer to the beginning of publics table    */
     char* code_ptr;            /* A pointer to the bytecode itself               */
     size_t code_size;          /* A size of the bytecode                         */
-    int* global_ptr;           /* A pointer to the global area                   */
     int stringtab_size;        /* The size (in bytes) of the string table        */
     int global_area_size;      /* The size (in words) of global area             */
     int public_symbols_number; /* The number of public symbols                   */
@@ -575,6 +574,9 @@ void disassemble(FILE* f, bytefile* bf) {
 
     context.globals.p = data_mem + STACK_SIZE * 2;
     context.globals.n = global_size;
+    for(int i = 0; i < global_size; i++)
+        context.globals.p[i] = 0;
+
     context.code.p = (uint8_t*)bf->code_ptr;
     context.code.n = bf->code_size;
     set_ip(&context, context.code.p);
@@ -761,7 +763,6 @@ bytefile* read_file(char* fname) {
     file->public_ptr = (int*)file->buffer;
     file->code_ptr = &file->string_ptr[file->stringtab_size];
     file->code_size = size - (file->public_symbols_number * 2 * sizeof(int)) - file->stringtab_size;
-    file->global_ptr = (int*)malloc(file->global_area_size * sizeof(int));
 
     return file;
 }
